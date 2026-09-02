@@ -80,7 +80,12 @@ it('snapshots every connected user of an application at once', function () {
 
     $snapshot = registry()->snapshot('app-id');
 
-    expect($snapshot)->toBe(['42' => 3, '7' => 1]);
+    // SCAN returns keys in whatever order the keyspace hands them back, so the
+    // snapshot is sorted before comparison rather than pinning an order the
+    // method does not promise.
+    ksort($snapshot);
+
+    expect($snapshot)->toBe([7 => 1, 42 => 3]);
 });
 
 it('names the channel a user\'s messages are delivered on', function () {

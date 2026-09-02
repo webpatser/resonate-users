@@ -104,6 +104,9 @@ class UserRegistry
      * this is one sweep plus a single pipelined batch of SMEMBERS, whatever the
      * user count.
      *
+     * The order is whatever SCAN hands back and is not stable between calls.
+     * Sort the result if you are going to display it.
+     *
      * @return array<string, int> User id => device count.
      */
     public function snapshot(?string $appId = null): array
