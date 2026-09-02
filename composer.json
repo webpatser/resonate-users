@@ -1,0 +1,59 @@
+{
+    "name": "webpatser/resonate-users",
+    "description": "Signed-in user identity and direct messaging for Resonate: pusher:signin, user channels and a cluster-wide device index",
+    "keywords": ["resonate", "websockets", "pusher", "authentication", "chat", "broadcasting"],
+    "license": "MIT",
+    "type": "library",
+    "authors": [
+        {
+            "name": "Christoph Kempen",
+            "email": "christoph@downsized.nl"
+        }
+    ],
+    "require": {
+        "php": "^8.5",
+        "illuminate/contracts": "^13.0",
+        "illuminate/support": "^13.0",
+        "webpatser/fledge-fiber": "^13.29",
+        "webpatser/resonate": "^0.6.2"
+    },
+    "require-dev": {
+        "larastan/larastan": "^3.10",
+        "laravel/pint": "^1.30",
+        "orchestra/testbench": "^10.0|^11.0",
+        "pestphp/pest": "^4.0",
+        "phpstan/phpstan": "^2.2",
+        "predis/predis": "^2.2",
+        "pusher/pusher-php-server": "^7.2"
+    },
+    "autoload": {
+        "psr-4": {
+            "Webpatser\\ResonateUsers\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Webpatser\\ResonateUsers\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Webpatser\\ResonateUsers\\UsersServiceProvider"
+            ]
+        }
+    },
+    "scripts": {
+        "analyse": "phpstan analyse",
+        "lint": "pint --test",
+        "test": "pest"
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
