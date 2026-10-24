@@ -12,8 +12,8 @@
 
 2. Nothing else changes. Existing configuration, published config files and environment variables keep working.
 
+Resonate 0.7 is no longer supported by this release line; stay on `0.7.x` if you cannot move to resonate 1.0 yet.
+
 ## Known limitations
 
 - Key discovery uses `SCAN`, so it is not safe on Redis Cluster. Run against a single Redis or Valkey instance (or a replicated primary) until cluster support lands.
-
-Resonate 0.7 is no longer supported by this release line; stay on `0.7.x` if you cannot move to resonate 1.0 yet.
