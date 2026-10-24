@@ -5,6 +5,20 @@ All notable changes to `webpatser/resonate-users` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-10-24
+
+Stable release. Requires `webpatser/resonate` `^1.0`. No API changes; see [UPGRADE.md](UPGRADE.md).
+
+### Changed
+
+- Require `webpatser/resonate` `^1.0` (was `^0.7`)
+
+## [0.7.1] - 2026-10-22
+
+### Changed
+
+- Raise the `webpatser/fledge-fiber` floor to `^13.38`.
+
 ## [0.7.0] - 2026-09-23
 
 ### Changed
@@ -40,3 +54,10 @@ First release.
 ### Fixed
 
 - `POST /apps/{id}/users/{userId}/terminate_connections` reaches signed-in users who never joined a presence channel, on this node and across the cluster. Both paths match on the `user_id` recorded against a channel connection, and the user channel subscription carries it. No change to the server was needed.
+
+[Unreleased]: https://github.com/webpatser/resonate-users/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/webpatser/resonate-users/compare/v0.7.1...v1.0.0
+[0.7.1]: https://github.com/webpatser/resonate-users/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/webpatser/resonate-users/compare/v0.1.1...v0.7.0
+[0.1.1]: https://github.com/webpatser/resonate-users/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/webpatser/resonate-users/releases/tag/v0.1.0
