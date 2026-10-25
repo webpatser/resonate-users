@@ -114,6 +114,8 @@ class UserChannelPlugin implements ConnectionLifecycle, MessageInterceptor, Serv
             UserKeys::nodeId(),
             (int) ($config['ttl'] ?? 90),
         );
+
+        $this->markNodeAlive();
     }
 
     /**
@@ -306,7 +308,8 @@ class UserChannelPlugin implements ConnectionLifecycle, MessageInterceptor, Serv
     }
 
     /**
-     * Rewrite every tracked user's set from the connections this node holds.
+     * Refresh this node's liveness key, then rewrite every tracked user's set
+     * from the connections this node holds.
      *
      * The authoritative pass, the same shape as the roster and user-cap
      * heartbeats. Anything Redis holds that this node no longer holds is
@@ -315,6 +318,8 @@ class UserChannelPlugin implements ConnectionLifecycle, MessageInterceptor, Serv
      */
     protected function reconcile(): void
     {
+        $this->markNodeAlive();
+
         if ($this->index === null) {
             return;
         }
@@ -338,6 +343,33 @@ class UserChannelPlugin implements ConnectionLifecycle, MessageInterceptor, Serv
             if (($this->tracked[$appId] ?? []) === []) {
                 unset($this->tracked[$appId]);
             }
+        }
+    }
+
+    /**
+     * Refresh this node's liveness key for every application it serves.
+     *
+     * Runs at boot and on every heartbeat, whether or not anyone is signed in,
+     * so a reader can tell an empty index from a socket server that is not
+     * reporting ({@see UserRegistry::hasLiveNode()}). There is no shutdown hook
+     * in the plugin contract, so a node that stops lets its key lapse by TTL.
+     *
+     * A failure is logged rather than thrown: it must not cost the heartbeat
+     * its user reconcile, and the next tick tries again. A node that cannot
+     * reach Redis stops refreshing, which is exactly what a reader should see.
+     */
+    protected function markNodeAlive(): void
+    {
+        if ($this->index === null) {
+            return;
+        }
+
+        try {
+            foreach ($this->context->applications() as $application) {
+                $this->index->markAlive($application->id());
+            }
+        } catch (Throwable $e) {
+            Log::error('User index node heartbeat failed: '.$e->getMessage());
         }
     }
 

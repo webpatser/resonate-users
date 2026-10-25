@@ -5,6 +5,17 @@ All notable changes to `webpatser/resonate-users` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-10-25
+
+### Added
+
+- Node liveness. Every running `UserChannelPlugin` writes `{prefix}-nodes:{appId}:{nodeId}` at boot and refreshes it on every heartbeat with the configured `ttl`, whether or not anyone is signed in. The key sits outside the `{prefix}:{appId}:*` user sweep, so `snapshot()` never reads it as a user.
+- `UserRegistry::hasLiveNode()` and `UserRegistry::liveNodes()`, so a reader can tell an empty index (nobody is connected) from a silent one (no socket server is reporting). A Redis failure throws; it is never answered as "no live node".
+
+### Upgrading
+
+Restart the websocket server (`php artisan resonate:start`, or `resonate:reload`) so the plugin starts writing its node key. No config change. Until every node runs 1.1.0, `hasLiveNode()` only sees the upgraded ones.
+
 ## [1.0.0] - 2026-10-24
 
 Stable release. Requires `webpatser/resonate` `^1.0`. No API changes; see [UPGRADE.md](UPGRADE.md).
@@ -55,7 +66,8 @@ First release.
 
 - `POST /apps/{id}/users/{userId}/terminate_connections` reaches signed-in users who never joined a presence channel, on this node and across the cluster. Both paths match on the `user_id` recorded against a channel connection, and the user channel subscription carries it. No change to the server was needed.
 
-[Unreleased]: https://github.com/webpatser/resonate-users/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/webpatser/resonate-users/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/webpatser/resonate-users/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/webpatser/resonate-users/compare/v0.7.1...v1.0.0
 [0.7.1]: https://github.com/webpatser/resonate-users/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/webpatser/resonate-users/compare/v0.1.1...v0.7.0

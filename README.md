@@ -99,6 +99,24 @@ $users->snapshot();            // ['42' => 3, '7' => 1] for the whole applicatio
 
 On a server with several applications, pass the id: `$users->isOnline('42', 'app-two')`.
 
+### Is anything reporting?
+
+An empty index has two readings: nobody is connected, or no socket server is running (or none can reach Redis). Anything that acts on an absence, such as marking a person offline because the index does not list them, has to tell those apart. Every running node refreshes a liveness key on each heartbeat, whether or not anyone is signed in, so you can ask:
+
+```php
+$users->hasLiveNode();         // bool: at least one node is reporting
+$users->liveNodes();           // ['web-1-4242', ...] the nodes currently reporting
+```
+
+```php
+if (! $users->hasLiveNode()) {
+    // The index is silent, not empty. Do not treat absence as gone.
+    return;
+}
+```
+
+A Redis failure throws rather than answering `false`, so an outage on the reading side is never mistaken for a dead socket server. A node that stops lets its key lapse after `ttl` seconds, since the plugin contract has no shutdown hook; until then it still counts as live.
+
 ## Events
 
 | Event | When |
@@ -133,6 +151,8 @@ Override any of these per environment with `RESONATE_USERS_*` variables.
 
 Membership is written per node, at `{prefix}:{appId}:{userId}:{nodeId}`, so a node that dies lets its share expire by TTL rather than a live node holding it open. The lifecycle hooks make the fast incremental edits; the heartbeat tick is the authority, rewriting each tracked user's set from the connections this node actually holds. A lost removal therefore self-heals instead of reporting a signed-out person as online forever.
 
+Beside the user sets, each node holds `{prefix}-nodes:{appId}:{nodeId}` for every application it serves, written at boot and refreshed by the same heartbeat with the same `ttl`. The suffix sits on the prefix segment, so the key never matches the `{prefix}:{appId}:*` sweep and is never read as a user.
+
 The index is never consulted when sending. That path is a channel broadcast, which the server already fans out correctly.
 
 ## Other plugins
@@ -142,7 +162,7 @@ If you also run [`webpatser/resonate-webhooks`](https://github.com/webpatser/res
 ## Requirements
 
 - PHP 8.5+
-- Resonate 0.7+
+- Resonate 1.0+
 - A Redis server reachable from every Resonate node
 
 ## Testing

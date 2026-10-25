@@ -62,7 +62,7 @@ function signinPayload(string $socketId, array $userData, string $key = 'app-key
  */
 function flushUserKeys(Client $redis): void
 {
-    foreach ($redis->keys('users-test:*') as $key) {
+    foreach ([...$redis->keys('users-test:*'), ...$redis->keys('users-test-nodes:*')] as $key) {
         $redis->del($key);
     }
 }

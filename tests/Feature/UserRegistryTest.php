@@ -1,6 +1,7 @@
 <?php
 
 use Predis\Client;
+use Predis\Connection\ConnectionException;
 use Webpatser\Resonate\Contracts\ApplicationProvider;
 use Webpatser\ResonateUsers\UserRegistry;
 
@@ -86,6 +87,47 @@ it('snapshots every connected user of an application at once', function () {
     ksort($snapshot);
 
     expect($snapshot)->toBe([7 => 1, 42 => 3]);
+});
+
+it('tells an empty index with a live node from one with none', function () {
+    // Nobody is signed in either way. Only the node key says whether that is
+    // because nobody is connected or because nothing is reporting.
+    expect(registry()->snapshot())->toBe([])
+        ->and(registry()->hasLiveNode())->toBeFalse()
+        ->and(registry()->liveNodes())->toBe([]);
+
+    $this->redis->setex('users-test-nodes:app-id:node-a', 90, (string) time());
+
+    expect(registry()->snapshot())->toBe([])
+        ->and(registry()->hasLiveNode())->toBeTrue()
+        ->and(registry()->liveNodes())->toBe(['node-a']);
+});
+
+it('lists every live node of an application and no other', function () {
+    $this->redis->setex('users-test-nodes:app-id:node-a', 90, (string) time());
+    $this->redis->setex('users-test-nodes:app-id:node-b', 90, (string) time());
+    $this->redis->setex('users-test-nodes:app-two:node-c', 90, (string) time());
+
+    expect(registry()->liveNodes('app-id'))->toEqualCanonicalizing(['node-a', 'node-b'])
+        ->and(registry()->liveNodes('app-two'))->toBe(['node-c'])
+        ->and(registry()->hasLiveNode('app-three'))->toBeFalse();
+});
+
+it('never counts a node key as a user', function () {
+    $this->redis->setex('users-test-nodes:app-id:node-a', 90, (string) time());
+    $this->redis->sadd('users-test:app-id:42:node-a', ['1001.1']);
+
+    expect(registry()->snapshot('app-id'))->toBe([42 => 1]);
+});
+
+it('throws rather than reporting no live node when redis is unreachable', function () {
+    $registry = new UserRegistry(
+        (array) config('resonate-users'),
+        app(ApplicationProvider::class),
+        new Client(['host' => '127.0.0.1', 'port' => 1, 'timeout' => 0.5]),
+    );
+
+    expect(fn () => $registry->hasLiveNode())->toThrow(ConnectionException::class);
 });
 
 it('names the channel a user\'s messages are delivered on', function () {

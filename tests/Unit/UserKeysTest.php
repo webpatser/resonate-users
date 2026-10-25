@@ -28,6 +28,28 @@ it('reads the user back out of a key', function () {
         ->and($keys->userFromKey('app-id', 'users:app-id:no-node-segment'))->toBeNull();
 });
 
+it('keeps a node liveness key outside every user sweep', function () {
+    $keys = new UserKeys('users');
+
+    $node = $keys->nodeKey('app-id', 'node-a');
+
+    // The suffix sits on the prefix segment, so the snapshot's sweep of the
+    // application never reads a node as a user.
+    expect($node)->toBe('users-nodes:app-id:node-a')
+        ->and($keys->nodeScanPattern('app-id'))->toBe('users-nodes:app-id:*')
+        ->and(fnmatch($keys->appScanPattern('app-id'), $node))->toBeFalse()
+        ->and($keys->userFromKey('app-id', $node))->toBeNull();
+});
+
+it('reads the node back out of a liveness key', function () {
+    $keys = new UserKeys('users');
+
+    expect($keys->nodeFromKey('app-id', 'users-nodes:app-id:node-a'))->toBe('node-a')
+        ->and($keys->nodeFromKey('app-id', 'users-nodes:app-two:node-a'))->toBeNull()
+        ->and($keys->nodeFromKey('app-id', 'users-nodes:app-id:'))->toBeNull()
+        ->and($keys->nodeFromKey('app-id', 'users:app-id:42:node-a'))->toBeNull();
+});
+
 it('neutralises a user id that would break or widen a key', function () {
     $keys = new UserKeys('users');
 

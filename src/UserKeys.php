@@ -13,6 +13,10 @@ use RuntimeException;
  * a live node holding it open, the pattern resonate-roster and
  * resonate-user-cap both use.
  *
+ * Beside the user sets, every running node holds "{prefix}-nodes:{appId}:{nodeId}"
+ * ({@see nodeKey()}), so a reader can tell an empty index from a socket server
+ * that is not reporting at all.
+ *
  * The index answers "is this person connected, and on how many devices"
  * cluster-wide. It is deliberately not on the send path: a message for a user
  * is broadcast to {@see userChannel()}, which the event dispatcher already
@@ -109,6 +113,58 @@ class UserKeys
     public function appScanPattern(string $appId): string
     {
         return $this->prefix.':'.$this->escapeGlob($appId).':*';
+    }
+
+    /**
+     * The liveness key a running node holds for one application.
+     *
+     * "{prefix}-nodes:{appId}:{nodeId}", a plain string with the index TTL,
+     * written at boot and refreshed on every heartbeat whether or not the node
+     * holds a single signed-in user. Its presence is what tells an empty index
+     * ("nobody is connected") apart from a dead or unreachable socket server
+     * ("nobody is reporting").
+     *
+     * The suffix sits on the prefix segment, not after it, so the key stays
+     * outside {@see appScanPattern()} and a user sweep never reads a node as a
+     * user.
+     */
+    public function nodeKey(string $appId, string $node): string
+    {
+        return $this->nodePrefix().':'.$appId.':'.$node;
+    }
+
+    /**
+     * The SCAN pattern matching every live node's key of one application.
+     */
+    public function nodeScanPattern(string $appId): string
+    {
+        return $this->nodePrefix().':'.$this->escapeGlob($appId).':*';
+    }
+
+    /**
+     * Extract the node id from a liveness key of one application.
+     *
+     * Returns null for a key of another application, or one with no node id.
+     */
+    public function nodeFromKey(string $appId, string $key): ?string
+    {
+        $head = $this->nodePrefix().':'.$appId.':';
+
+        if (! str_starts_with($key, $head)) {
+            return null;
+        }
+
+        $node = substr($key, strlen($head));
+
+        return $node === '' || str_contains($node, ':') ? null : $node;
+    }
+
+    /**
+     * The namespace of the node liveness keys.
+     */
+    protected function nodePrefix(): string
+    {
+        return $this->prefix.'-nodes';
     }
 
     /**

@@ -2,6 +2,7 @@
 
 namespace Webpatser\ResonateUsers;
 
+use Fledge\Async\Redis\Command\Option\SetOptions;
 use Fledge\Async\Redis\RedisClient;
 
 /**
@@ -102,6 +103,23 @@ class UserDeviceIndex
         $this->redis->expireIn($key, $this->ttl);
 
         return true;
+    }
+
+    /**
+     * Record that this node is running and reporting for an application.
+     *
+     * One SET with the index TTL, refreshed on every heartbeat. Written whether
+     * or not the node holds any signed-in user, so "nobody is connected" and
+     * "no socket server is reporting" stay distinguishable to a reader. A node
+     * that dies, or loses Redis, stops refreshing and its key expires.
+     */
+    public function markAlive(string $appId): void
+    {
+        $this->redis->set(
+            $this->keys->nodeKey($appId, $this->node),
+            (string) time(),
+            (new SetOptions)->withTtl($this->ttl),
+        );
     }
 
     /**

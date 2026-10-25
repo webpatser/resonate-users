@@ -168,6 +168,47 @@ class UserRegistry
     }
 
     /**
+     * Determine whether at least one socket server node is reporting.
+     *
+     * Every running {@see UserChannelPlugin} refreshes a liveness key on each
+     * heartbeat, whether or not anyone is signed in. So an empty
+     * {@see snapshot()} with a live node means nobody is connected, while an
+     * empty snapshot with no live node means nothing is reporting, and the
+     * index says nothing either way. Check this before treating an absence
+     * from the index as a person being gone.
+     *
+     * A Redis failure throws; it is never reported as "no live node".
+     */
+    public function hasLiveNode(?string $appId = null): bool
+    {
+        return $this->liveNodes($appId) !== [];
+    }
+
+    /**
+     * The ids of the socket server nodes currently reporting for an application.
+     *
+     * The order is whatever SCAN hands back.
+     *
+     * @return list<string>
+     */
+    public function liveNodes(?string $appId = null): array
+    {
+        $app = $this->appId($appId);
+
+        $nodes = [];
+
+        foreach ($this->keysMatching($this->keys->nodeScanPattern($app)) as $key) {
+            $node = $this->keys->nodeFromKey($app, $key);
+
+            if ($node !== null) {
+                $nodes[$node] = true;
+            }
+        }
+
+        return array_map('strval', array_keys($nodes));
+    }
+
+    /**
      * The keys holding a user's sockets, one per node.
      *
      * @return list<string>

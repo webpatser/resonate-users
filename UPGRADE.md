@@ -1,5 +1,12 @@
 # Upgrade guide
 
+## From 1.0 to 1.1
+
+1.1 is additive: node liveness keys and `UserRegistry::hasLiveNode()` / `liveNodes()`.
+
+1. Restart the websocket server (`php artisan resonate:start`, or `resonate:reload`) so the plugin starts writing its node key.
+2. No config change. Until every node runs 1.1, `hasLiveNode()` only sees the upgraded ones.
+
 ## From 0.7 to 1.0
 
 1.0 is a constraint bump: there are no API, config or behaviour changes.

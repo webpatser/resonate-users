@@ -14,6 +14,7 @@ use Webpatser\ResonateUsers\Events\UserWentOffline;
 use Webpatser\ResonateUsers\Tests\Support\FakeConnection;
 use Webpatser\ResonateUsers\UserChannelPlugin;
 use Webpatser\ResonateUsers\UserKeys;
+use Webpatser\ResonateUsers\UserRegistry;
 
 beforeEach(function () {
     if (! redisReachable()) {
@@ -375,6 +376,38 @@ it('rebuilds the index from live connections on the heartbeat', function () {
     $key = $this->redis->keys('users-test:app-id:42:*')[0];
 
     expect($this->redis->smembers($key))->toBe(['1001.1']);
+});
+
+it('marks the node alive at boot with nobody signed in', function () {
+    runLoop(function () {
+        bootedPlugin();
+    });
+
+    $key = 'users-test-nodes:app-id:'.UserKeys::nodeId();
+
+    expect($this->redis->exists($key))->toBe(1)
+        ->and($this->redis->ttl($key))->toBeGreaterThan(0)->toBeLessThanOrEqual(90)
+        ->and($this->redis->keys('users-test:*'))->toBe([])
+        ->and(app(UserRegistry::class)->liveNodes())->toBe([UserKeys::nodeId()]);
+});
+
+it('refreshes the node key on every heartbeat whether or not anyone is tracked', function () {
+    $key = 'users-test-nodes:app-id:'.UserKeys::nodeId();
+
+    runLoop(function () use ($key) {
+        $plugin = bootedPlugin();
+
+        // As if the key had lapsed, say after a Redis restart. The next tick
+        // must put it back even though this node tracks no user at all.
+        $this->redis->del($key);
+
+        foreach ($plugin->ticks() as $tick) {
+            ($tick['callback'])();
+        }
+    });
+
+    expect($this->redis->exists($key))->toBe(1)
+        ->and($this->redis->ttl($key))->toBeGreaterThan(0);
 });
 
 it('works when registered the way the server registers it', function () {
