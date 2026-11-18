@@ -162,7 +162,7 @@ If you also run [`webpatser/resonate-webhooks`](https://github.com/webpatser/res
 ## Requirements
 
 - PHP 8.5+
-- Resonate 1.0+
+- Resonate 1.2+
 - A Redis server reachable from every Resonate node
 
 ## Testing

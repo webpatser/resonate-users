@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Joins the user channel through `PluginContext::joinUserChannel()` when the installed resonate core provides it, and through the previous subscribe path otherwise.
+- Requires `webpatser/resonate` `^1.2`.
+- Always joins the user channel through `PluginContext::joinUserChannel()`; the `pusher:subscribe` fallback for older cores is gone.
 
 ### Changed (performance)
 
@@ -23,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Note
 
-- With a core that refuses client subscribes to user channels itself, the client sees core's refusal message instead of this plugin's; the error code stays `4009`.
+- Core 1.2 refuses client subscribes to user channels itself, so the client sees core's refusal message instead of this plugin's; the error code stays `4009`.
 
 ## [1.1.0] - 2026-10-25
 

@@ -244,33 +244,22 @@ class UserChannelPlugin implements ConnectionLifecycle, MessageInterceptor, Serv
     /**
      * Subscribe a signed-in connection to its own user channel.
      *
-     * The subscribe runs through the standard {@see EventHandler} path rather
-     * than being performed directly, so the connection lands in the channel
-     * registry exactly as any other subscription does, and every other plugin
-     * sees the usual `onSubscribe`.
-     *
      * Core refuses a client subscribe to the `#server-to-user-` prefix, so the
      * join goes through {@see PluginContext::joinUserChannel()}, the server's
-     * own path. A core release without that method still admits the prefix
-     * from a `pusher:subscribe`, so the frame path is kept as the fallback.
+     * own path. It subscribes through the standard {@see EventHandler} path
+     * rather than touching the channel directly, so the connection lands in
+     * the channel registry exactly as any other subscription does, and every
+     * other plugin sees the usual `onSubscribe`.
      *
-     * `channel_data` naming the user is what makes `terminate_connections`
-     * work: both the HTTP controller and the cross-node terminate envelope find
-     * a connection by the `user_id` recorded against it here.
+     * Core records `channel_data` naming the user, which is what makes
+     * `terminate_connections` work: both the HTTP controller and the
+     * cross-node terminate envelope find a connection by the `user_id`
+     * recorded against it here.
      */
     protected function joinUserChannel(Connection $from, string $userId): void
     {
         try {
-            if (method_exists($this->context, 'joinUserChannel')) {
-                $this->context->joinUserChannel($from, $userId);
-
-                return;
-            }
-
-            app(EventHandler::class)->handle($from, 'pusher:subscribe', [
-                'channel' => UserKeys::userChannel($userId),
-                'channel_data' => json_encode(['user_id' => $userId], JSON_THROW_ON_ERROR),
-            ]);
+            $this->context->joinUserChannel($from, $userId);
         } catch (Throwable $e) {
             // A refused subscribe (the connection is at its subscription cap,
             // say) must not cost the client its identity: it stays signed in,
