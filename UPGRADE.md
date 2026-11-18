@@ -1,5 +1,9 @@
 # Upgrade guide
 
+## Unreleased
+
+The heartbeat now rewrites each user's device set with a Lua script (`EVALSHA`, falling back to `EVAL`). If your Redis connection uses an ACL user, it needs permission to run scripts (`EVALSHA` / `EVAL`) on the device index keys. Before this change `src` used no scripts.
+
 ## From 1.0 to 1.1
 
 1.1 is additive: node liveness keys and `UserRegistry::hasLiveNode()` / `liveNodes()`.

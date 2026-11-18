@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Joins the user channel through `PluginContext::joinUserChannel()` when the installed resonate core provides it, and through the previous subscribe path otherwise.
 
+### Changed (performance)
+
+- Closing a connection no longer asks the cluster whether the user is still online while the user has another device open on this node; the cluster-wide check runs only when the user's last local device closes.
+- The heartbeat rewrites each user's device set with one script call instead of several commands, in chunks of 500 users; a failed rewrite no longer skips the remaining users.
+
+### Fixed
+
+- A sign-in whose connection closed while it was still being registered no longer joins the user channel or leaves its socket in the device set.
+- After a Redis restart, failover or script flush, the heartbeat re-reads a user's sockets before it resends the rewrite, so a device that signed in meanwhile is not dropped from the set.
+
 ### Note
 
 - With a core that refuses client subscribes to user channels itself, the client sees core's refusal message instead of this plugin's; the error code stays `4009`.
