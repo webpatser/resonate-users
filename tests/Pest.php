@@ -3,11 +3,15 @@
 use Predis\Client;
 use Pusher\Pusher;
 use Revolt\EventLoop;
+use Webpatser\Resonate\Contracts\ApplicationProvider;
+use Webpatser\Resonate\Plugins\PluginContext;
 use Webpatser\Resonate\Protocols\Pusher\Contracts\ChannelConnectionManager;
 use Webpatser\Resonate\Protocols\Pusher\Contracts\ChannelManager;
 use Webpatser\Resonate\Protocols\Pusher\Managers\ArrayChannelConnectionManager;
 use Webpatser\Resonate\Protocols\Pusher\Managers\ArrayChannelManager;
+use Webpatser\ResonateUsers\Tests\Support\FakeConnection;
 use Webpatser\ResonateUsers\Tests\TestCase;
+use Webpatser\ResonateUsers\UserChannelPlugin;
 
 uses(TestCase::class)->in(__DIR__.'/Feature', __DIR__.'/Integration');
 
@@ -34,6 +38,25 @@ function redisReachable(): bool
     fclose($connection);
 
     return true;
+}
+
+/**
+ * A user channel plugin booted against the real plugin context.
+ */
+function bootedPlugin(): UserChannelPlugin
+{
+    $plugin = new UserChannelPlugin;
+    $plugin->boot(app(PluginContext::class));
+
+    return $plugin;
+}
+
+/**
+ * A fake connection on the test application.
+ */
+function connection(string $socketId): FakeConnection
+{
+    return new FakeConnection($socketId, app(ApplicationProvider::class)->findById('app-id'));
 }
 
 /**
@@ -70,11 +93,11 @@ function flushUserKeys(Client $redis): void
 /**
  * Run a closure inside the Revolt event loop, surfacing any failure.
  */
-function runLoop(Closure $body): void
+function runLoop(Closure $body, float $timeout = 5.0): void
 {
     $error = null;
 
-    $watchdog = EventLoop::delay(5.0, function () use (&$error) {
+    $watchdog = EventLoop::delay($timeout, function () use (&$error) {
         $error = 'event loop timed out';
         EventLoop::getDriver()->stop();
     });

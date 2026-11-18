@@ -11,6 +11,7 @@ use Webpatser\Resonate\Protocols\Pusher\EventDispatcher;
 use Webpatser\ResonateUsers\Events\UserSignedIn;
 use Webpatser\ResonateUsers\Events\UserSignInRejected;
 use Webpatser\ResonateUsers\Events\UserWentOffline;
+use Webpatser\ResonateUsers\Tests\Support\CountingUserChannelPlugin;
 use Webpatser\ResonateUsers\Tests\Support\FakeConnection;
 use Webpatser\ResonateUsers\UserChannelPlugin;
 use Webpatser\ResonateUsers\UserKeys;
@@ -33,19 +34,6 @@ afterEach(function () {
         flushUserKeys($this->redis);
     }
 });
-
-function bootedPlugin(): UserChannelPlugin
-{
-    $plugin = new UserChannelPlugin;
-    $plugin->boot(app(PluginContext::class));
-
-    return $plugin;
-}
-
-function connection(string $socketId): FakeConnection
-{
-    return new FakeConnection($socketId, app(ApplicationProvider::class)->findById('app-id'));
-}
 
 /**
  * The decoded frames a fake connection was sent.
@@ -376,6 +364,203 @@ it('rebuilds the index from live connections on the heartbeat', function () {
     $key = $this->redis->keys('users-test:app-id:42:*')[0];
 
     expect($this->redis->smembers($key))->toBe(['1001.1']);
+});
+
+it('does not sweep the keyspace when a user still has a device on this node', function () {
+    Event::fake([UserWentOffline::class]);
+
+    $laptop = connection('3001.1');
+    $phone = connection('3002.2');
+    $plugin = new CountingUserChannelPlugin;
+
+    runLoop(function () use ($plugin, $laptop, $phone) {
+        $plugin->boot(app(PluginContext::class));
+
+        foreach ([$laptop, $phone] as $device) {
+            $plugin->onMessage($device, [
+                'event' => 'pusher:signin',
+                'data' => signinPayload($device->id(), ['id' => '42']),
+            ]);
+        }
+
+        $plugin->link->reset();
+
+        $plugin->onClose($laptop);
+    });
+
+    // The phone is still signed in here, so the user is online without asking
+    // Redis. The removal itself is the only command the close needs.
+    expect($plugin->link->commands)->toBe(['srem'])
+        ->and($this->redis->smembers($this->redis->keys('users-test:app-id:42:*')[0]))->toBe(['3002.2']);
+
+    Event::assertNotDispatched(UserWentOffline::class);
+});
+
+it('still asks the cluster when the last local device of a user closes', function () {
+    Event::fake([UserWentOffline::class]);
+
+    $connection = connection('1001.1');
+    $plugin = new CountingUserChannelPlugin;
+
+    runLoop(function () use ($plugin, $connection) {
+        $plugin->boot(app(PluginContext::class));
+
+        $plugin->onMessage($connection, [
+            'event' => 'pusher:signin',
+            'data' => signinPayload('1001.1', ['id' => '42']),
+        ]);
+
+        $plugin->link->reset();
+
+        $plugin->onClose($connection);
+    });
+
+    expect($plugin->link->count('scan'))->toBeGreaterThanOrEqual(1);
+
+    Event::assertDispatched(UserWentOffline::class);
+});
+
+it('rewrites every tracked user in one pipelined command each on the heartbeat', function () {
+    $users = ['41' => '4001.1', '42' => '4002.2', '43' => '4003.3'];
+    $plugin = new CountingUserChannelPlugin;
+
+    runLoop(function () use ($plugin, $users) {
+        $plugin->boot(app(PluginContext::class));
+
+        foreach ($users as $userId => $socketId) {
+            $plugin->onMessage(connection($socketId), [
+                'event' => 'pusher:signin',
+                'data' => signinPayload($socketId, ['id' => (string) $userId]),
+            ]);
+        }
+
+        // A ghost on one user, so the rewrite has something to drop.
+        $this->redis->sadd($this->redis->keys('users-test:app-id:42:*')[0], ['9999.9']);
+
+        // The first tick may load the script; the second is the steady state.
+        foreach ($plugin->ticks() as $tick) {
+            ($tick['callback'])();
+        }
+
+        $plugin->link->reset();
+
+        foreach ($plugin->ticks() as $tick) {
+            ($tick['callback'])();
+        }
+    });
+
+    // One liveness SET, then a single script call per user, all in flight at
+    // once: no SMEMBERS read, no separate SREM, SADD or EXPIRE round trips.
+    expect($plugin->link->commands)->toBe(['set', 'evalsha', 'evalsha', 'evalsha'])
+        ->and($plugin->link->maxInFlight)->toBe(3);
+
+    foreach ($users as $userId => $socketId) {
+        $key = $this->redis->keys("users-test:app-id:{$userId}:*")[0];
+
+        expect($this->redis->smembers($key))->toBe([$socketId])
+            ->and($this->redis->ttl($key))->toBeGreaterThan(0)->toBeLessThanOrEqual(90);
+    }
+});
+
+it('rewrites a large index in bounded chunks on the heartbeat', function () {
+    $plugin = new CountingUserChannelPlugin;
+
+    runLoop(function () use ($plugin) {
+        $plugin->boot(app(PluginContext::class));
+
+        for ($user = 1; $user <= 1200; $user++) {
+            $socketId = "{$user}.1";
+
+            $plugin->onMessage(connection($socketId), [
+                'event' => 'pusher:signin',
+                'data' => signinPayload($socketId, ['id' => (string) $user]),
+            ]);
+        }
+
+        // Ghosts on the first and the last user, one in each outer chunk.
+        foreach (['1', '1200'] as $user) {
+            $this->redis->sadd($this->redis->keys("users-test:app-id:{$user}:*")[0], ['9999.9']);
+        }
+
+        // Warm the script cache, then measure a steady tick.
+        foreach ($plugin->ticks() as $tick) {
+            ($tick['callback'])();
+        }
+
+        $plugin->link->reset();
+
+        foreach ($plugin->ticks() as $tick) {
+            ($tick['callback'])();
+        }
+    }, timeout: 30.0);
+
+    // Every in-flight command is one user's fiber waiting on its reply, so this
+    // is the number of rewrite fibers alive at once: capped, yet pipelined.
+    expect($plugin->link->count('evalsha'))->toBe(1200)
+        ->and($plugin->link->maxInFlight)->toBe(500)
+        ->and($this->redis->keys('users-test:app-id:*'))->toHaveCount(1200)
+        ->and($this->redis->smembers($this->redis->keys('users-test:app-id:1:*')[0]))->toBe(['1.1'])
+        ->and($this->redis->smembers($this->redis->keys('users-test:app-id:1200:*')[0]))->toBe(['1200.1']);
+});
+
+it('keeps a device that signed in while the rewrite script was being reloaded', function () {
+    $laptop = connection('5001.1');
+    $phone = connection('5002.2');
+    $plugin = new CountingUserChannelPlugin;
+
+    runLoop(function () use ($plugin, $laptop, $phone) {
+        $plugin->boot(app(PluginContext::class));
+
+        $plugin->onMessage($laptop, [
+            'event' => 'pusher:signin',
+            'data' => signinPayload('5001.1', ['id' => '42']),
+        ]);
+
+        // The script cache is gone (restart, failover, SCRIPT FLUSH). The phone
+        // signs in after the EVALSHA went out and before its NOSCRIPT reply.
+        $plugin->link->noScriptOnce = function () use ($plugin, $phone) {
+            $plugin->onMessage($phone, [
+                'event' => 'pusher:signin',
+                'data' => signinPayload('5002.2', ['id' => '42']),
+            ]);
+        };
+
+        foreach ($plugin->ticks() as $tick) {
+            ($tick['callback'])();
+        }
+    });
+
+    $members = $this->redis->smembers($this->redis->keys('users-test:app-id:42:*')[0]);
+    sort($members);
+
+    expect($members)->toBe(['5001.1', '5002.2'])
+        ->and($plugin->link->noScriptOnce)->toBeNull();
+});
+
+it('leaves nothing behind for a socket that closed while its signin was being recorded', function () {
+    $connection = connection('6001.1');
+    $plugin = new CountingUserChannelPlugin;
+
+    runLoop(function () use ($plugin, $connection) {
+        $plugin->boot(app(PluginContext::class));
+
+        // The socket closes while the signin is suspended in index->add, in
+        // the worst order: its close runs before the SADD reaches Redis.
+        $plugin->link->beforeOnce['sadd'] = fn () => $plugin->onClose($connection);
+
+        $plugin->onMessage($connection, [
+            'event' => 'pusher:signin',
+            'data' => signinPayload('6001.1', ['id' => '42']),
+        ]);
+    });
+
+    $channel = app(ChannelManager::class)->for($this->application)->find('#server-to-user-42');
+
+    expect($plugin->link->beforeOnce)->toBe([])
+        ->and($channel?->findById('6001.1'))->toBeNull()
+        ->and($this->redis->keys('users-test:app-id:42:*'))->toBe([])
+        ->and(frameNames($connection))->not->toContain('pusher:signin_success')
+        ->and($connection->hasState(UserChannelPlugin::USER_ID))->toBeFalse();
 });
 
 it('marks the node alive at boot with nobody signed in', function () {

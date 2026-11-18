@@ -2,6 +2,7 @@
 
 namespace Webpatser\ResonateUsers;
 
+use Fledge\Async\Redis\RedisClient;
 use Fledge\Async\Redis\RedisConfig;
 use JsonException;
 use Throwable;
@@ -19,6 +20,8 @@ use Webpatser\ResonateUsers\Events\UserSignedIn;
 use Webpatser\ResonateUsers\Events\UserSignInRejected;
 use Webpatser\ResonateUsers\Events\UserWentOffline;
 
+use function Fledge\Async\async;
+use function Fledge\Async\Future\awaitAll;
 use function Fledge\Async\Redis\createRedisClient;
 
 /**
@@ -57,6 +60,17 @@ class UserChannelPlugin implements ConnectionLifecycle, MessageInterceptor, Serv
      * The connection state key holding the signed-in user's info blob.
      */
     public const string USER_INFO = 'user.info';
+
+    /**
+     * How many users the heartbeat rewrites in flight at once.
+     *
+     * Each in-flight rewrite holds a fiber, and each fiber its own stack
+     * mapping, so this bounds the tick at a few hundred mappings (far under
+     * Linux's default vm.max_map_count of 65530) and a few MB of stack, while
+     * a chunk's commands (each a few hundred bytes) still go out as one
+     * pipelined write of well under a megabyte.
+     */
+    private const int RECONCILE_CHUNK = 500;
 
     /**
      * The server API surface handed in at boot.
@@ -109,7 +123,7 @@ class UserChannelPlugin implements ConnectionLifecycle, MessageInterceptor, Serv
         $this->joinsUserChannel = (bool) ($config['user_channels'] ?? true);
 
         $this->index = new UserDeviceIndex(
-            createRedisClient($this->makeConfig((array) ($config['connection'] ?? []))),
+            $this->makeClient($this->makeConfig((array) ($config['connection'] ?? []))),
             $this->keys,
             UserKeys::nodeId(),
             (int) ($config['ttl'] ?? 90),
@@ -200,6 +214,19 @@ class UserChannelPlugin implements ConnectionLifecycle, MessageInterceptor, Serv
         $this->tracked[$appId][$userId][$from->id()] = $from;
 
         $this->index->add($appId, $userId, $from->id());
+
+        // The socket closed while the add was awaiting Redis: onClose has run,
+        // forgotten the identity and reported the user offline if that was the
+        // last device. Joining now would leave a dead socket in the user
+        // channel for good, so stop here, before either join path. The add may
+        // have reached Redis after onClose's removal, so remove it once more;
+        // SREM is idempotent. The offline report is not repeated, since
+        // onClose already evaluated it for this socket.
+        if ($from->state(self::USER_ID) !== $userId) {
+            $this->index->remove($appId, $userId, $from->id());
+
+            return MessageDisposition::Handled;
+        }
 
         if ($this->joinsUserChannel) {
             $this->joinUserChannel($from, $userId);
@@ -335,25 +362,71 @@ class UserChannelPlugin implements ConnectionLifecycle, MessageInterceptor, Serv
             return;
         }
 
-        foreach ($this->tracked as $appId => $users) {
+        $index = $this->index;
+
+        /** @var list<array{string, string}> $users */
+        $users = [];
+
+        foreach ($this->tracked as $appId => $byUser) {
             // PHP coerces numeric-string array keys to int, and both
             // application ids and user ids are usually numeric, so each segment
             // is cast back before it is fed into the key schema.
-            $appId = (string) $appId;
+            foreach (array_keys($byUser) as $userId) {
+                $users[] = [(string) $appId, (string) $userId];
+            }
+        }
 
-            foreach ($users as $userId => $connections) {
-                $userId = (string) $userId;
+        /** @var list<Throwable> $errors */
+        $errors = [];
 
-                $sockets = array_map(strval(...), array_keys($connections));
+        foreach (array_chunk($users, self::RECONCILE_CHUNK) as $chunk) {
+            $futures = [];
+            $startFailed = false;
 
-                if (! $this->index->sync($appId, $userId, $sockets)) {
-                    unset($this->tracked[$appId][$userId]);
+            try {
+                foreach ($chunk as [$appId, $userId]) {
+                    // A chunk's rewrites are issued at once, so the client
+                    // pipelines them on its connection: one round trip per
+                    // chunk rather than one per user. The fledge-fiber client
+                    // has no fiber-free pipeline (each execute() awaits its own
+                    // reply), so each in-flight command needs a fiber, and the
+                    // chunk is what bounds them. The socket list is read inside
+                    // the fiber right before its command is queued, so a signin
+                    // or close during the tick is ordered after the rewrite.
+                    $futures[] = async(function () use ($index, $appId, $userId): void {
+                        $sockets = fn (): array => array_map(strval(...), array_keys($this->tracked[$appId][$userId] ?? []));
+
+                        if (! $index->rewrite($appId, $userId, $sockets) && ($this->tracked[$appId][$userId] ?? []) === []) {
+                            unset($this->tracked[$appId][$userId]);
+                        }
+                    });
                 }
+            } catch (Throwable $e) {
+                // A fiber that could not be started: the ones already running
+                // are still awaited below, so none of their failures go unseen.
+                $errors[] = $e;
+                $startFailed = true;
             }
 
-            if (($this->tracked[$appId] ?? []) === []) {
+            // Wait for the whole chunk before surfacing a failure, so one bad
+            // reply neither skips the other users nor leaves a future unseen.
+            foreach (awaitAll($futures)[0] as $error) {
+                $errors[] = $error;
+            }
+
+            if ($startFailed) {
+                break;
+            }
+        }
+
+        foreach (array_keys($this->tracked) as $appId) {
+            if ($this->tracked[$appId] === []) {
                 unset($this->tracked[$appId]);
             }
+        }
+
+        if ($errors !== []) {
+            throw $errors[0];
         }
     }
 
@@ -398,9 +471,14 @@ class UserChannelPlugin implements ConnectionLifecycle, MessageInterceptor, Serv
             return;
         }
 
-        if (($this->tracked[$appId][$userId] ?? []) === []) {
-            unset($this->tracked[$appId][$userId]);
+        // A device still open on this node settles it without asking Redis: the
+        // cluster-wide count is a keyspace sweep, so it only runs once the last
+        // local device of this user has gone.
+        if (($this->tracked[$appId][$userId] ?? []) !== []) {
+            return;
         }
+
+        unset($this->tracked[$appId][$userId]);
 
         if ($this->index->deviceCount($appId, $userId) === 0) {
             UserWentOffline::dispatch($appId, $userId);
@@ -502,6 +580,14 @@ class UserChannelPlugin implements ConnectionLifecycle, MessageInterceptor, Serv
             'code' => $code,
             'message' => $message,
         ]);
+    }
+
+    /**
+     * Open the long-lived Redis client the index writes through.
+     */
+    protected function makeClient(RedisConfig $config): RedisClient
+    {
+        return createRedisClient($config);
     }
 
     /**
